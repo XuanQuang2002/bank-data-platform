@@ -1,7 +1,7 @@
 from datetime import date
 
 import pytest
-from load_berka import clean_value, convert_row, parse_date
+from load_berka import clean_value, convert_row, mask_birth_number, mask_row, parse_date
 
 
 def test_parse_date_yymmdd() -> None:
@@ -66,3 +66,12 @@ def test_convert_row_parses_dates_and_missing_values() -> None:
         None,
         None,
     ]
+
+
+def test_mask_birth_number_hides_all_digits() -> None:
+    assert mask_birth_number("706213") == "******"
+
+
+def test_mask_row_masks_only_birth_number() -> None:
+    header = ["client_id", "birth_number", "district_id"]
+    assert mask_row(header, ["1", "706213", "18"]) == ["1", "******", "18"]

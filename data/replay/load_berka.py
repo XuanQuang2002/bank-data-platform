@@ -57,6 +57,19 @@ def parse_date(raw: str) -> date:
     return date(year, month, day)
 
 
+def mask_birth_number(birth_number: str) -> str:
+    """Hide the PII in a birth_number, keeping only its length visible."""
+    return "*" * len(birth_number)
+
+
+def mask_row(header: list[str], row: list[str]) -> list[str]:
+    """Return a copy of the row that is safe to print."""
+    return [
+        mask_birth_number(value) if column == "birth_number" else value
+        for column, value in zip(header, row)
+    ]
+
+
 def convert_row(header: list[str], row: list[str]) -> list[str | date | None]:
     """Clean every value and turn date columns into real dates."""
     values: list[str | date | None] = []
@@ -73,8 +86,14 @@ def read_rows(path: Path) -> Iterator[list[str | date | None]]:
     with path.open(newline="") as file:
         reader = csv.reader(file, delimiter=";")
         header = next(reader)
-        for row in reader:
-            yield convert_row(header, row)
+        for line_number, row in enumerate(
+            reader, start=2
+        ):  # start=2 to account for header line
+            try:
+                yield convert_row(header, row)
+            except ValueError as e:
+                safe_row = mask_row(header, row)
+                raise ValueError(f"{path.name} line {line_number}: {safe_row}") from e
 
 
 def load_table(cursor: psycopg.Cursor, path: Path, table: str) -> int:
