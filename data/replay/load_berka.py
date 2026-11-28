@@ -1,7 +1,31 @@
+import csv
 import os
+from collections.abc import Iterator
 from datetime import date
+from pathlib import Path
 
 import psycopg
+from psycopg import sql
+
+RAW_DIR = Path("data/raw")
+
+TABLES = [
+    ("district.asc", "district"),
+    ("account.asc", "account"),
+    ("client.asc", "client"),
+    ("disp.asc", "disp"),
+    ("card.asc", "card"),
+    ("loan.asc", "loan"),
+    ("order.asc", "permanent_order"),
+    ("trans.asc", "trans"),
+]
+
+DATE_COLUMNS = {"date", "issued"}
+
+TRUNCATE_SQL = """
+    truncate berka.district, berka.account, berka.client, berka.disp,
+             berka.card, berka.loan, berka.permanent_order, berka.trans
+"""
 
 
 def connect() -> psycopg.Connection:
@@ -33,10 +57,50 @@ def parse_date(raw: str) -> date:
     return date(year, month, day)
 
 
+def convert_row(header: list[str], row: list[str]) -> list[str | date | None]:
+    """Clean every value and turn date columns into real dates."""
+    values: list[str | date | None] = []
+    for column, raw in zip(header, row):
+        value = clean_value(raw)
+        if value is not None and column in DATE_COLUMNS:
+            value = parse_date(value)
+        values.append(value)
+    return values
+
+
+def read_rows(path: Path) -> Iterator[list[str | date | None]]:
+    """Yield converted rows one at a time, so the 1M-row file never sits in memory."""
+    with path.open(newline="") as file:
+        reader = csv.reader(file, delimiter=";")
+        header = next(reader)
+        for row in reader:
+            yield convert_row(header, row)
+
+
+def load_table(cursor: psycopg.Cursor, path: Path, table: str) -> int:
+    statement = sql.SQL("copy berka.{} from stdin").format(sql.Identifier(table))
+    count = 0
+    with cursor.copy(statement) as copy:
+        for row in read_rows(path):
+            copy.write_row(row)
+            count += 1
+    return count
+
+
+def load_all(conn: psycopg.Connection, raw_dir: Path) -> dict[str, int]:
+    counts = {}
+    with conn.cursor() as cursor:
+        cursor.execute(TRUNCATE_SQL)
+        for file_name, table in TABLES:
+            counts[table] = load_table(cursor, raw_dir / file_name, table)
+    return counts
+
+
 def main() -> None:
     with connect() as conn:
-        version = conn.execute("select version()").fetchone()[0]
-        print(f"Connected: {version}")
+        counts = load_all(conn, RAW_DIR)
+    for table, count in counts.items():
+        print(f"Loaded {count} rows into {table}")
 
 
 if __name__ == "__main__":
